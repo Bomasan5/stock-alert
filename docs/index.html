@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>株アラート設定</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--text:#1d2129;--sub:#6b7280;--line:#e3e5e8;--accent:#0a7c5a;--danger:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#111418;--card:#1b1f25;--text:#e8eaed;--sub:#9aa0a6;--line:#2c323a;--accent:#34c38f;--danger:#ef6b5b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 -apple-system,"Hiragino Sans","Noto Sans JP",sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:12px 16px;display:flex;align-items:center;justify-content:space-between}
+h1{font-size:18px;margin:0}
+main{padding:16px;max-width:640px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
+.card h2{font-size:15px;margin:0 0 10px;color:var(--sub)}
+label{display:block;font-size:13px;color:var(--sub);margin:8px 0 2px}
+input,select{width:100%;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)}
+.row{display:flex;gap:8px}.row>*{flex:1}
+button{font-size:15px;padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--text)}
+button.primary{background:var(--accent);color:#fff;border:none}
+button.danger{color:var(--danger)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:4px 10px;font-size:14px}
+.chip b{margin-left:6px;color:var(--danger);cursor:pointer}
+.cond{border:1px dashed var(--line);border-radius:10px;padding:10px;margin-top:10px}
+.cond-head{display:flex;justify-content:space-between;align-items:center;font-weight:600}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:6px}
+.seg button{flex:1;border:none;border-radius:0}
+.seg button.on{background:var(--accent);color:#fff}
+.toast{position:fixed;left:16px;right:16px;bottom:16px;background:#222;color:#fff;padding:12px;border-radius:10px;text-align:center;display:none}
+.muted{color:var(--sub);font-size:13px}
+details summary{cursor:pointer;color:var(--sub)}
+</style>
+</head>
+<body>
+<header><h1>📈 株アラート設定</h1><button class="primary" id="saveBtn">保存</button></header>
+<main>
+  <details class="card" id="connBox">
+    <summary>GitHub接続設定</summary>
+    <label>ユーザー名/リポジトリ名（例: taro/stock-alert）</label>
+    <input id="repo" placeholder="owner/repo">
+    <label>アクセストークン（この端末にだけ保存されます）</label>
+    <input id="token" type="password" placeholder="github_pat_...">
+    <div class="row" style="margin-top:10px"><button id="connectBtn" class="primary">接続して読み込む</button></div>
+  </details>
+
+  <div id="app" hidden>
+    <div class="card">
+      <h2>監視する銘柄</h2>
+      <div class="row"><input id="tickerIn" placeholder="7203.T / AAPL"><button id="addTicker" style="flex:0 0 auto">追加</button></div>
+      <p class="muted">日本株は証券コード＋「.T」（例：トヨタ 7203.T）</p>
+      <div class="chips" id="tickers"></div>
+    </div>
+    <div class="card">
+      <h2>足の種類</h2>
+      <select id="interval">
+        <option value="1d">日足</option><option value="1h">1時間足</option><option value="1wk">週足</option>
+      </select>
+    </div>
+    <div id="rules"></div>
+    <button id="addRule" style="width:100%">＋ ルールを追加</button>
+    <div class="row" style="margin-top:14px"><button id="runBtn">今すぐチェック</button></div>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const store = { get(k){ try{return localStorage.getItem(k)}catch(e){return null} }, set(k,v){ try{localStorage.setItem(k,v)}catch(e){} } };
+let cfg = null, sha = null;
+
+const TYPES = {
+  ma_cross:   { label:"移動平均クロス", def:{short:5,long:25,direction:"golden",within:3} },
+  ma_position:{ label:"移動平均の位置", def:{short:5,long:25,position:"above"} },
+  rsi:        { label:"RSI", def:{period:14,op:"<",value:30} },
+  macd:       { label:"MACDクロス", def:{fast:12,slow:26,signal:9,direction:"golden",within:3} },
+  dmi:        { label:"DMI / ADX", def:{period:14,trend:"plus",adx_min:25} },
+};
+const MODES = [["all","全部成立"],["none","全部不成立"],["any","どれか成立"]];
+
+function toast(m){ const t=$("#toast"); t.textContent=m; t.style.display="block"; setTimeout(()=>t.style.display="none",2500); }
+function api(path, opt={}){
+  return fetch(`https://api.github.com/repos/${$("#repo").value.trim()}${path}`, {
+    ...opt, headers:{ Authorization:`Bearer ${$("#token").value.trim()}`, Accept:"application/vnd.github+json", ...(opt.headers||{}) }
+  });
+}
+const b64dec = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g,"")), c=>c.charCodeAt(0)));
+const b64enc = s => { const b=new TextEncoder().encode(s); let r=""; b.forEach(x=>r+=String.fromCharCode(x)); return btoa(r); };
+
+async function load(){
+  store.set("repo",$("#repo").value.trim()); store.set("token",$("#token").value.trim());
+  const r = await api("/contents/config.json");
+  if(!r.ok){ toast("読み込み失敗: "+r.status); return; }
+  const j = await r.json(); sha = j.sha; cfg = JSON.parse(b64dec(j.content));
+  $("#connBox").open = false; $("#app").hidden = false; render();
+}
+
+async function save(){
+  if(!cfg) return;
+  const r = await api("/contents/config.json", { method:"PUT", body: JSON.stringify({
+    message:"設定を更新", content: b64enc(JSON.stringify(cfg,null,2)+"\n"), sha })});
+  if(r.ok){ sha=(await r.json()).content.sha; toast("保存しました（自動でチェックが走ります）"); }
+  else toast("保存失敗: "+r.status);
+}
+
+async function runNow(){
+  const r = await api("/actions/workflows/alert.yml/dispatches",{method:"POST",body:JSON.stringify({ref:"main"})});
+  toast(r.ok ? "チェックを開始しました。結果はLINEに届きます" : "実行失敗: "+r.status);
+}
+
+function num(v){ const n=Number(v); return isNaN(n)?v:n; }
+function field(label, c, key, opts){
+  const w=document.createElement("div"); w.innerHTML=`<label>${label}</label>`;
+  let el;
+  if(opts){ el=document.createElement("select"); opts.forEach(([v,t])=>{const o=new Option(t,v); if(String(c[key])===v) o.selected=true; el.add(o);}); }
+  else { el=document.createElement("input"); el.type="number"; el.inputMode="decimal"; el.value=c[key]; }
+  el.onchange=()=>{ c[key]= opts? el.value : num(el.value); };
+  w.appendChild(el); return w;
+}
+
+function condFields(c){
+  const dir=[["golden","上抜け（ゴールデン）"],["dead","下抜け（デッド）"]];
+  const f=[];
+  if(c.type==="ma_cross"){ f.push(field("短期",c,"short"),field("長期",c,"long"),field("方向",c,"direction",dir),field("何本以内",c,"within")); }
+  if(c.type==="ma_position"){ f.push(field("短期",c,"short"),field("長期",c,"long"),field("位置",c,"position",[["above","短期が上"],["below","短期が下"]])); }
+  if(c.type==="rsi"){ f.push(field("期間",c,"period"),field("比較",c,"op",[["<","より下"],[">","より上"]]),field("しきい値",c,"value")); }
+  if(c.type==="macd"){ f.push(field("短期EMA",c,"fast"),field("長期EMA",c,"slow"),field("シグナル",c,"signal"),field("方向",c,"direction",dir),field("何本以内",c,"within")); }
+  if(c.type==="dmi"){ f.push(field("期間",c,"period"),field("トレンド",c,"trend",[["plus","+DI > -DI（上昇）"],["minus","-DI > +DI（下降）"]]),field("ADX以上",c,"adx_min")); }
+  return f;
+}
+
+function render(){
+  // 銘柄
+  const tk=$("#tickers"); tk.innerHTML="";
+  cfg.tickers.forEach((t,i)=>{ const s=document.createElement("span"); s.className="chip"; s.innerHTML=`${t}<b>×</b>`;
+    s.querySelector("b").onclick=()=>{cfg.tickers.splice(i,1);render();}; tk.appendChild(s); });
+  $("#interval").value = cfg.interval||"1d";
+
+  // ルール
+  const box=$("#rules"); box.innerHTML="";
+  cfg.rules.forEach((rule,ri)=>{
+    const card=document.createElement("div"); card.className="card";
+    card.innerHTML=`<div class="row"><input value="${rule.name}"><label style="flex:0 0 auto;display:flex;align-items:center;gap:4px;margin:0"><input type="checkbox" style="width:auto" ${rule.enabled!==false?"checked":""}>ON</label></div>`;
+    const [nameIn, onIn]=card.querySelectorAll("input");
+    nameIn.onchange=()=>rule.name=nameIn.value; onIn.onchange=()=>rule.enabled=onIn.checked;
+
+    const seg=document.createElement("div"); seg.className="seg";
+    MODES.forEach(([m,t])=>{ const b=document.createElement("button"); b.textContent=t; if((rule.mode||"all")===m) b.className="on";
+      b.onclick=()=>{rule.mode=m;render();}; seg.appendChild(b); });
+    card.appendChild(seg);
+
+    rule.conditions.forEach((c,ci)=>{
+      const d=document.createElement("div"); d.className="cond";
+      d.innerHTML=`<div class="cond-head"><span>${TYPES[c.type].label}</span><button class="danger">削除</button></div>`;
+      d.querySelector("button").onclick=()=>{rule.conditions.splice(ci,1);render();};
+      const grid=document.createElement("div"); grid.className="row"; grid.style.flexWrap="wrap";
+      condFields(c).forEach(x=>{x.style.flex="1 1 45%"; grid.appendChild(x);}); d.appendChild(grid); card.appendChild(d);
+    });
+
+    const add=document.createElement("div"); add.className="row"; add.style.marginTop="10px";
+    const sel=document.createElement("select"); Object.entries(TYPES).forEach(([k,v])=>sel.add(new Option(v.label,k)));
+    const ab=document.createElement("button"); ab.textContent="条件を追加"; ab.style.flex="0 0 auto";
+    ab.onclick=()=>{ rule.conditions.push({type:sel.value,...TYPES[sel.value].def}); render(); };
+    add.append(sel,ab); card.appendChild(add);
+
+    const del=document.createElement("button"); del.className="danger"; del.textContent="このルールを削除"; del.style.marginTop="10px";
+    del.onclick=()=>{ if(confirm("削除しますか？")){cfg.rules.splice(ri,1);render();} };
+    card.appendChild(del);
+    box.appendChild(card);
+  });
+}
+
+$("#addTicker").onclick=()=>{ const v=$("#tickerIn").value.trim().toUpperCase(); if(v&&!cfg.tickers.includes(v)){cfg.tickers.push(v);$("#tickerIn").value="";render();} };
+$("#interval").onchange=e=>{ cfg.interval=e.target.value; cfg.period = e.target.value==="1h" ? "60d" : (e.target.value==="1wk" ? "5y" : "1y"); };
+$("#addRule").onclick=()=>{ cfg.rules.push({name:"新しいルール",enabled:true,mode:"all",conditions:[]}); render(); };
+$("#connectBtn").onclick=load; $("#saveBtn").onclick=save; $("#runBtn").onclick=runNow;
+
+$("#repo").value=store.get("repo")||""; $("#token").value=store.get("token")||"";
+if($("#repo").value && $("#token").value) load(); else $("#connBox").open=true;
+</script>
+</body>
+</html>
