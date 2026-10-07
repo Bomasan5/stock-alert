@@ -1,0 +1,37 @@
+name: stock-alert
+
+on:
+  schedule:
+    # 平日 日本時間 9:00〜15:30 の間、30分ごと（cronはUTC表記）
+    - cron: "*/30 0-6 * * 1-5"
+  workflow_dispatch: {}   # 設定画面の「今すぐチェック」ボタン用
+  push:
+    paths: ["config.json"] # 設定を保存したらすぐチェック
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stock-alert
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run checker
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: python checker.py
+      - name: Save state
+        run: |
+          git config user.name "stock-alert-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || (git commit -m "update state [skip ci]" && git push)
