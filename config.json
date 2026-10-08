@@ -1,17 +1,42 @@
 {
-  "interval": "1d",
-  "period": "1y",
-  "tickers": ["7203.T", "6758.T", "AAPL"],
+  "interval": "1h",
+  "period": "60d",
+  "tickers": [
+    "1570.T"
+  ],
   "rules": [
     {
       "name": "買いシグナル",
       "enabled": true,
       "mode": "all",
       "conditions": [
-        { "type": "ma_cross", "short": 5, "long": 25, "direction": "golden", "within": 3 },
-        { "type": "rsi", "period": 14, "op": "<", "value": 50 },
-        { "type": "macd", "fast": 12, "slow": 26, "signal": 9, "direction": "golden", "within": 3 },
-        { "type": "dmi", "period": 14, "trend": "plus", "adx_min": 20 }
+        {
+          "type": "ma_cross",
+          "short": 5,
+          "long": 25,
+          "direction": "golden",
+          "within": 3
+        },
+        {
+          "type": "rsi",
+          "period": 14,
+          "op": "<",
+          "value": 50
+        },
+        {
+          "type": "macd",
+          "fast": 12,
+          "slow": 26,
+          "signal": 9,
+          "direction": "golden",
+          "within": 3
+        },
+        {
+          "type": "dmi",
+          "period": 14,
+          "trend": "plus",
+          "adx_min": 20
+        }
       ]
     },
     {
@@ -19,10 +44,33 @@
       "enabled": true,
       "mode": "all",
       "conditions": [
-        { "type": "ma_cross", "short": 5, "long": 25, "direction": "dead", "within": 3 },
-        { "type": "rsi", "period": 14, "op": ">", "value": 50 },
-        { "type": "macd", "fast": 12, "slow": 26, "signal": 9, "direction": "dead", "within": 3 },
-        { "type": "dmi", "period": 14, "trend": "minus", "adx_min": 20 }
+        {
+          "type": "ma_cross",
+          "short": 5,
+          "long": 25,
+          "direction": "dead",
+          "within": 3
+        },
+        {
+          "type": "rsi",
+          "period": 14,
+          "op": ">",
+          "value": 50
+        },
+        {
+          "type": "macd",
+          "fast": 12,
+          "slow": 26,
+          "signal": 9,
+          "direction": "dead",
+          "within": 3
+        },
+        {
+          "type": "dmi",
+          "period": 14,
+          "trend": "minus",
+          "adx_min": 20
+        }
       ]
     }
   ]
